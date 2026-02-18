@@ -37,9 +37,11 @@ import { generateImageTool } from "../tools/GenerateImageTool"
 import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
 import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
+import { selectActiveIntentTool } from "../tools/SelectActiveIntentTool"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
+import { validateGovernanceHook } from "../../hooks/governance"
 
 /**
  * Processes and presents assistant message content to the user interface.
@@ -319,6 +321,21 @@ export async function presentAssistantMessage(cline: Task) {
 				cline.didAlreadyUseTool = true
 				break
 			}
+
+			// ==== CONSOLIDATED GOVERNANCE HOOKS ====
+			if (!block.partial) {
+				const govCheck = validateGovernanceHook(cline, block, toolCallId)
+				if (!govCheck.allowed) {
+					cline.pushToolResultToUserContent({
+						type: "tool_result",
+						tool_use_id: sanitizeToolUseId(toolCallId!),
+						content: formatResponse.toolError(govCheck.error!),
+						is_error: true,
+					})
+					break // KILL EXECUTION FOR ANY VIOLATION
+				}
+			}
+			// =======================================
 
 			// Fetch state early so it's available for toolDescription and validation
 			const state = await cline.providerRef.deref()?.getState()
@@ -791,6 +808,13 @@ export async function presentAssistantMessage(cline: Task) {
 					break
 				case "ask_followup_question":
 					await askFollowupQuestionTool.handle(cline, block as ToolUse<"ask_followup_question">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
+				case "select_active_intent":
+					await selectActiveIntentTool.handle(cline, block as ToolUse<"select_active_intent">, {
 						askApproval,
 						handleError,
 						pushToolResult,
