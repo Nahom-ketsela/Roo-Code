@@ -168,6 +168,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	pendingNewTaskToolCallId?: string
 	activeIntentId?: string
 	activeIntentScope: string[] = []
+	currentIntentId?: string
+	currentMutationClass?: "AST_REFACTOR" | "INTENT_EVOLUTION"
 
 	readonly instanceId: string
 	readonly metadata: TaskMetadata

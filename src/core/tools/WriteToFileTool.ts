@@ -17,10 +17,13 @@ import { convertNewFileToUnifiedDiff, computeDiffStats, sanitizeUnifiedDiff } fr
 import type { ToolUse } from "../../shared/tools"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
+import { logAgentTrace } from "../../hooks/traceLogger"
 
 interface WriteToFileParams {
 	path: string
 	content: string
+	intent_id: string
+	mutation_class: "AST_REFACTOR" | "INTENT_EVOLUTION"
 }
 
 export class WriteToFileTool extends BaseTool<"write_to_file"> {
@@ -31,72 +34,76 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 		const relPath = params.path
 		let newContent = params.content
 
-		if (!relPath) {
-			task.consecutiveMistakeCount++
-			task.recordToolError("write_to_file")
-			pushToolResult(await task.sayAndCreateMissingParamError("write_to_file", "path"))
-			await task.diffViewProvider.reset()
-			return
-		}
-
-		if (newContent === undefined) {
-			task.consecutiveMistakeCount++
-			task.recordToolError("write_to_file")
-			pushToolResult(await task.sayAndCreateMissingParamError("write_to_file", "content"))
-			await task.diffViewProvider.reset()
-			return
-		}
-
-		const accessAllowed = task.rooIgnoreController?.validateAccess(relPath)
-
-		if (!accessAllowed) {
-			await task.say("rooignore_error", relPath)
-			pushToolResult(formatResponse.rooIgnoreError(relPath))
-			return
-		}
-
-		const isWriteProtected = task.rooProtectedController?.isWriteProtected(relPath) || false
-
-		let fileExists: boolean
-		const absolutePath = path.resolve(task.cwd, relPath)
-
-		if (task.diffViewProvider.editType !== undefined) {
-			fileExists = task.diffViewProvider.editType === "modify"
-		} else {
-			fileExists = await fileExistsAtPath(absolutePath)
-			task.diffViewProvider.editType = fileExists ? "modify" : "create"
-		}
-
-		// Create parent directories early for new files to prevent ENOENT errors
-		// in subsequent operations (e.g., diffViewProvider.open, fs.readFile)
-		if (!fileExists) {
-			await createDirectoriesForFile(absolutePath)
-		}
-
-		if (newContent.startsWith("```")) {
-			newContent = newContent.split("\n").slice(1).join("\n")
-		}
-
-		if (newContent.endsWith("```")) {
-			newContent = newContent.split("\n").slice(0, -1).join("\n")
-		}
-
-		if (!task.api.getModel().id.includes("claude")) {
-			newContent = unescapeHtmlEntities(newContent)
-		}
-
-		const fullPath = relPath ? path.resolve(task.cwd, relPath) : ""
-		const isOutsideWorkspace = isPathOutsideWorkspace(fullPath)
-
-		const sharedMessageProps: ClineSayTool = {
-			tool: fileExists ? "editedExistingFile" : "newFileCreated",
-			path: getReadablePath(task.cwd, relPath),
-			content: newContent,
-			isOutsideWorkspace,
-			isProtected: isWriteProtected,
-		}
+		// Capture semantic metadata for upcoming Tracing Ledger
+		task.currentIntentId = params.intent_id
+		task.currentMutationClass = params.mutation_class
 
 		try {
+			if (!relPath) {
+				task.consecutiveMistakeCount++
+				task.recordToolError("write_to_file")
+				pushToolResult(await task.sayAndCreateMissingParamError("write_to_file", "path"))
+				await task.diffViewProvider.reset()
+				return
+			}
+
+			if (newContent === undefined) {
+				task.consecutiveMistakeCount++
+				task.recordToolError("write_to_file")
+				pushToolResult(await task.sayAndCreateMissingParamError("write_to_file", "content"))
+				await task.diffViewProvider.reset()
+				return
+			}
+
+			const accessAllowed = task.rooIgnoreController?.validateAccess(relPath)
+
+			if (!accessAllowed) {
+				await task.say("rooignore_error", relPath)
+				pushToolResult(formatResponse.rooIgnoreError(relPath))
+				return
+			}
+
+			const isWriteProtected = task.rooProtectedController?.isWriteProtected(relPath) || false
+
+			let fileExists: boolean
+			const absolutePath = path.resolve(task.cwd, relPath)
+
+			if (task.diffViewProvider.editType !== undefined) {
+				fileExists = task.diffViewProvider.editType === "modify"
+			} else {
+				fileExists = await fileExistsAtPath(absolutePath)
+				task.diffViewProvider.editType = fileExists ? "modify" : "create"
+			}
+
+			// Create parent directories early for new files to prevent ENOENT errors
+			// in subsequent operations (e.g., diffViewProvider.open, fs.readFile)
+			if (!fileExists) {
+				await createDirectoriesForFile(absolutePath)
+			}
+
+			if (newContent.startsWith("```")) {
+				newContent = newContent.split("\n").slice(1).join("\n")
+			}
+
+			if (newContent.endsWith("```")) {
+				newContent = newContent.split("\n").slice(0, -1).join("\n")
+			}
+
+			if (!task.api.getModel().id.includes("claude")) {
+				newContent = unescapeHtmlEntities(newContent)
+			}
+
+			const fullPath = relPath ? path.resolve(task.cwd, relPath) : ""
+			const isOutsideWorkspace = isPathOutsideWorkspace(fullPath)
+
+			const sharedMessageProps: ClineSayTool = {
+				tool: fileExists ? "editedExistingFile" : "newFileCreated",
+				path: getReadablePath(task.cwd, relPath),
+				content: newContent,
+				isOutsideWorkspace,
+				isProtected: isWriteProtected,
+			}
+
 			task.consecutiveMistakeCount = 0
 
 			const provider = task.providerRef.deref()
@@ -184,12 +191,19 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 
 			task.processQueuedMessages()
 
+			// Post-Execution Hook: Record the semantic mutation to the trace ledger
+			await logAgentTrace(task, relPath, newContent)
+
 			return
 		} catch (error) {
 			await handleError("writing file", error as Error)
 			await task.diffViewProvider.reset()
 			this.resetPartialState()
 			return
+		} finally {
+			// Clear semantic metadata after execution
+			task.currentIntentId = undefined
+			task.currentMutationClass = undefined
 		}
 	}
 
