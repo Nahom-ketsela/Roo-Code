@@ -18,6 +18,7 @@ import type { ToolUse } from "../../shared/tools"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 import { logAgentTrace } from "../../hooks/traceLogger"
+import { generateContentHash } from "../../utils/hash"
 
 interface WriteToFileParams {
 	path: string
@@ -140,6 +141,25 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					return
 				}
 
+				// ==== PHASE 4: OPTIMISTIC LOCKING (STALE CHECK) ====
+				if (fileExists) {
+					const currentDiskContent = await fs.readFile(absolutePath, "utf-8")
+					const currentDiskHash = generateContentHash(currentDiskContent)
+					const baselineHash = generateContentHash(task.diffViewProvider.originalContent)
+
+					if (currentDiskHash !== baselineHash) {
+						task.consecutiveMistakeCount++
+						task.recordToolError("write_to_file")
+						pushToolResult(
+							formatResponse.toolError(
+								"CONCURRENCY ERROR: Stale File. Another process modified this file. Re-read the file before applying changes.",
+							),
+						)
+						return
+					}
+				}
+				// ===================================================
+
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {
 				if (!task.diffViewProvider.isEditing) {
@@ -172,6 +192,26 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					await task.diffViewProvider.revertChanges()
 					return
 				}
+
+				// ==== PHASE 4: OPTIMISTIC LOCKING (STALE CHECK) ====
+				if (fileExists) {
+					const currentDiskContent = await fs.readFile(absolutePath, "utf-8")
+					const currentDiskHash = generateContentHash(currentDiskContent)
+					const baselineHash = generateContentHash(task.diffViewProvider.originalContent)
+
+					if (currentDiskHash !== baselineHash) {
+						task.consecutiveMistakeCount++
+						task.recordToolError("write_to_file")
+						await task.diffViewProvider.revertChanges()
+						pushToolResult(
+							formatResponse.toolError(
+								"CONCURRENCY ERROR: Stale File. Another process modified this file. Re-read the file before applying changes.",
+							),
+						)
+						return
+					}
+				}
+				// ===================================================
 
 				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
 			}
