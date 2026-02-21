@@ -80,6 +80,7 @@ export const toolParamNames = [
 	// read_file legacy format parameter (backward compatibility)
 	"files",
 	"line_ranges",
+	"lesson",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]
@@ -116,6 +117,7 @@ export type NativeToolArgs = {
 	use_mcp_tool: { server_name: string; tool_name: string; arguments?: Record<string, unknown> }
 	write_to_file: { path: string; content: string }
 	select_active_intent: { intent_id: string }
+	record_lesson: { lesson: string }
 	// Add more tools as they are migrated to native protocol
 }
 
@@ -196,6 +198,11 @@ export interface ReadFileToolUse extends ToolUse<"read_file"> {
 export interface WriteToFileToolUse extends ToolUse<"write_to_file"> {
 	name: "write_to_file"
 	params: Partial<Pick<Record<ToolParamName, string>, "path" | "content">>
+}
+
+export interface RecordLessonToolUse extends ToolUse<"record_lesson"> {
+	name: "record_lesson"
+	params: Partial<Pick<Record<ToolParamName, string>, "lesson">>
 }
 
 export interface CodebaseSearchToolUse extends ToolUse<"codebase_search"> {
@@ -290,6 +297,7 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	skill: "load skill",
 	generate_image: "generate images",
 	select_active_intent: "select active intent",
+	record_lesson: "record lesson",
 	custom_tool: "use custom tools",
 } as const
 
@@ -324,6 +332,7 @@ export const ALWAYS_AVAILABLE_TOOLS: ToolName[] = [
 	"run_slash_command",
 	"skill",
 	"select_active_intent",
+	"record_lesson",
 ] as const
 
 /**
